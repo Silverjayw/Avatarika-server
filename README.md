@@ -2,14 +2,14 @@
 
 ## Overview
 
-AVATARIKA is an abandoned online game (Steam AppID: 583740). This project contains research and tools to bring the game back online by understanding its file structure, startup flow, network stack, and API requirements.
+AVATARIKA is an abandoned online game (Steam AppID: 583740). This project contains research and tools to bring the game back online by understanding its file structure, startup flow, and network stack.
 
 ## Current Status
 
-- **Game launches and loads perfectly** after bypassing the launcher requirement
-- After connecting to the server, the game **loses connection** during loading
-- The game needs the full API implementation to complete loading
-- Packet capture (`avatarika2.pcapng`) shows the actual API traffic during the loading process
+- **Game launches and loads the full UI** (login screen, avatar, game world) when connected to the accesspoint
+- **Connection is lost after ~131 seconds** during game loading — the accesspoint sends something the client can't parse
+- The game connects to **local servers** (127.0.0.1), not to the Internet
+- `launchpoint.exe` is the **accesspoint server**, not just a launcher
 
 ## Quick Start
 
@@ -23,140 +23,141 @@ Or manually:
 
 ```bash
 cd /home/sanitar/Desktop/AVATARIKA
-python3 client.exe /24B3D4DC-BA6D-4ECD-94D5-F7C2F9EDDE7B /gamexp_sid /pid /locale /distributor
+python3 mock_accesspoint_tls.py
+python3 mock_game_server.py
+python3 mock_auth_server.py
+chmod +x run_avatnika.sh
+./run_avatnika.sh
 ```
 
 ## Launch Chain
 
 ```
-Steam → Proton → Gamexp Launcher (launchpoint.exe) → client.exe
+Steam → Proton → launchpoint.exe (accesspoint server) → client.exe
 ```
 
 ### Bypassing the Launcher
 
-The launcher (`launchpoint.exe`) passes CLI arguments to `client.exe` from `gmxp-info.json`. Providing these arguments directly to `client.exe` bypasses the "run start exe first" error:
+`launchpoint.exe` can be started directly with CLI arguments from `gmxp-info.json`:
 
+```bash
+./launchpoint.exe /24B3D4DC-BA6D-4ECD-94D5-F7C2F9EDDE7B /gamexp_sid /pid /locale /distributor
 ```
-client.exe /24B3D4DC-BA6D-4ECD-94D5-F7C2F9EDDE7B /gamexp_sid /pid /locale /distributor
+
+### Connecting Client.exe Directly
+
+```bash
+./client.exe /24B3D4DC-BA6D-4ECD-94D5-F7C2F9EDDE7B /gamexp_sid /pid /locale /distributor
 ```
+
+The client connects directly to the accesspoint on 127.0.0.1:27018 (TLS) and local game servers on 127.0.0.1:25858, 127.0.0.1:38560, 127.0.0.1:57343.
 
 ## Key Files
 
 ### Game Files (Steam)
-- `launchpoint.exe` — Gamexp launcher (Go 386 binary)
-- `client.exe` — Game client (MSVC PE32 binary)
+- `launchpoint.exe` — Accesspoint server (Go 386 binary, PE32, 7 sections, stripped to external PDB)
+- `client.exe` — Game client (MSVC PE32, 32-bit binary)
 - `connectn.cfg` — Server connection config (already points to 127.0.0.1)
 - `game.ini` — Game config (realm=localhost, Port=25859)
 - `url.ini` — URL config (127.0.0.1)
 - `urld.ini` — Auth URL (www.avatarika.gamexp.ru/reg.php)
-- `gmxp-cfg/init/connect.cfg` — Gamexp connection config
-- `params/servers.cfg` — Server list
 - `gmxp-info.json` — Gamexp API arguments
 - `lnimclient.dll` — Launcher IPC module
 
 ### Research & Tools
+- `mock_accesspoint_tls.py` — TLS accesspoint server (port 27018, custom 0x17 records)
+- `mock_game_server.py` — Game server (port 25858, binary protocol)
+- `mock_auth_server.py` — Auth server with CA-signed cert (port 8443)
+- `pcap_deep_analyzer.py` — Manual TLS record parser for custom 0x17 records
 - `protocol_analyzer.py` — Binary protocol analyzer
-- `mock_auth_server.py` — Mock auth server (port 8443)
-- `mock_game_server.py` — Mock game server (port 25858)
 - `run_avatnika.sh` — Wrapper script to run client.exe with required args
 - `avatarika.pcapng` — Original packet capture
-- `avatarika2.pcapng` — Packet capture during loading (168k packets, 181MB)
+- `avatarika2.pcapng` — Packet capture during loading (168k packets, 181MB, 131 seconds)
 
 ## Network Architecture
 
-### Binary Protocol Ports
-- **27018** — TLS port (Steam internal)
-- **38560** — Internal game port
-- **57343** — Internal game port (main game communication)
+### Accesspoint Server (launchpoint.exe)
+- **127.0.0.1:27018** — TLS server (SNI=`*.gamexp.com`, TLS 1.3, custom record type 0x17)
+- **127.0.0.1:25858** — Local game server (plain TCP, binary protocol)
 
-### API Connections (from avatarika2.pcapng)
-- **87.240.190.75:443** — Gamexp API (TLS, SNI=*.vk.com)
-- **162.159.130.235:8443** — Gamexp auth (TLS, Cloudflare)
-- **205.196.6.132:27018** — Steam network
+### Client Connections
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 27018 | TLS 1.3 (custom 0x17 records) | Accesspoint communication |
+| 25858 | Plain TCP | Game server |
+| 38560 | Plain TCP | Internal game communication |
+| 57343 | Plain TCP | Internal game communication |
+
+### Binary Protocol Structure
+All TCP connections use a 4-byte header:
+```
+[0]   type     (1 byte)
+[1-3] length   (3 bytes, big-endian)
+[4]   sub_type (1 byte)
+[5-6] length   (2 bytes, big-endian)
+[7+]  payload  (variable length)
+```
+
+**Known types:**
+- `0x01` — Keepalive
+- `0x02` — Data (messages)
+- `0x05` — Extended
+- `0x0d` / `0x0e` — ACK
+- `0x19` — Events
+
+**Custom 0x17 records (TLS):**
+- Header: `[type:1][length:3][sub_type:1][length:2]`
+- Payload: TLS-encrypted (not raw binary)
 
 ### TLS Details
-- **SNI**: `*.vk.com` (VKontakte CDN)
+- **SNI**: `*.gamexp.com` (accesspoint), `*.vk.com` (CDN)
 - **Protocol**: TLS 1.3
 - **Cipher**: TLS_AES_256_GCM_SHA384
 - **Certificate**: CN=www.vk, issued by VK CA
-- **WebSocket**: `wss://accesspoint-api.gamexp.com:8443/app?v=...`
 
-### Local Connections (during loading)
-- **127.0.0.1:25858** — Game server
-- **127.0.0.1:25859** — Game server (Port=25859 from game.ini)
-- **127.0.0.1:57343** — Internal game port
-- **127.0.0.1:38560** — Internal game port
+## Authentication
 
-## API Endpoints
+`launchpoint.exe` connects to the Gamexp API at `accesspoint-api.gamexp.com:8443` and implements the following auth flow:
 
-### Auth Server (HTTPS:8443)
-- `POST /lp/v2/api.php` — Authentication API
-- `GET /health` — Health check
-- `GET /authenticator` — Authenticator info
+1. **Phone verification (5-step EAP)**: Send code → validate → confirm → retry → confirm
+2. **Password authentication**: Send phone+password → receive token
+3. **System verification**: Send token → verify → complete
 
-### Game Server (TCP:25858/25859)
-- Binary protocol with 4-byte headers
-- Types: 0x01=keepalive, 0x02=data, 0x05=extended, 0x0d/0x0e=ACK, 0x19=events
+The `launchpoint.exe` binary uses **WebSocket Secure** (`Sec-WebSocket-Version` header) to connect to the API.
 
-### Required Implementation
-The game loses connection after initial handshake. The following API components need implementation:
-1. **WebSocket Secure server** on port 8443 (wss://)
-2. **Game server** on ports 25858-25868 and 57343
-3. **Full API protocol** matching the binary format captured in the PCAP
-4. **Authentication flow** (phone verification 5-step, password, system verify)
+## Game Behavior
 
-## Packet Analysis (avatarika2.pcapng)
+1. Client starts and connects to accesspoint (127.0.0.1:27018)
+2. Client connects to game servers (127.0.0.1:25858, 38560, 57343)
+3. Game loads and displays the **full UI** (login screen, avatar, game world)
+4. Game processes data from accesspoint and game servers
+5. **Connection is lost after ~131 seconds** — the accesspoint sends something the client can't parse
 
-### Capture Details
-- **Duration**: 131 seconds
-- **Packets**: 168,708
-- **Size**: 181 MB
-- **Rate**: 11 Mbps average
+## What's Working
 
-### Key Findings
-1. Client connects to `87.240.190.75:443` with TLS SNI `*.vk.com`
-2. TLS handshake uses TLS 1.3 with AES-256-GCM
-3. Server responds with certificate chain from VK CA
-4. After TLS handshake, client sends API requests
-5. Server returns responses that the game processes during loading
-6. Game eventually loses connection, indicating incomplete API implementation
+- ✅ Client launches without errors
+- ✅ Client connects to accesspoint on 127.0.0.1:27018 (TLS)
+- ✅ Client connects to game servers on 127.0.0.1:25858, 38560, 57343
+- ✅ Game displays the full UI (login screen, avatar, game world)
+- ✅ TLS handshake completes successfully
 
-### Protocol Flow
-1. Client connects to 87.240.190.75:443 (TLS)
-2. TLS handshake completes (SNI=*.vk.com)
-3. Client sends API request
-4. Server responds with data
-5. Client connects to local game servers (25858, 57343, etc.)
-6. Game loads and displays content
-7. Game attempts to connect back to API
-8. Connection lost (incomplete API implementation)
+## What's Not Working
 
-## Registry Keys
-
-Created under `HKCU\Software\GameXP\Games`:
-- `LaunchPoint=1`
-- `Authenticated=1`
-- `SessionValid=1`
-
-## Hosts File
-
-Modified `/etc/hosts` to redirect Gamexp domains to 127.0.0.1:
-- `avatarika.gamexp.ru` → 127.0.0.1
-- `accesspoint-api.gamexp.com` → 127.0.0.1
-- All `*.gamexp.com` → 127.0.0.1
+- ❌ **Custom 0x17 record payload structure unknown** — can't parse the encrypted payload
+- ❌ **Binary protocol sub_types for 0x02/data** — only confirmed `0x00` (ACK) and `0x01` (events)
+- ❌ **Initial handshake sequence** — does the client send something before connecting to 27018?
+- ❌ **38560 and 57343 protocols** — not enough captured traffic to understand these
 
 ## Next Steps
 
-1. **Implement WebSocket Secure server** on port 8443 matching the captured protocol
-2. **Implement game server** on ports 25858-25868 and 57343
-3. **Analyze binary protocol** from the PCAP to understand the exact message format
-4. **Test with mock server** to verify the game completes loading
-5. **Explore client.exe modification** to skip launcher requirements entirely
+1. **Capture more traffic** — get a full TLS handshake on 27018 to see the initial client message
+2. **Decipher 0x17 record payload** — need the actual accesspoint traffic to understand the encrypted format
+3. **Map binary protocol sub_types** — identify all message types for 0x02/data
+4. **Implement full accesspoint** — handle the complete binary protocol
+5. **Test with real accesspoint** — once the protocol is understood, test against the real server
 
 ## References
 
 - [Steam App Page](https://store.steampowered.com/app/583740/)
 - [Gamexp API Documentation](https://accesspoint-api.gamexp.com)
 - [VK CA Certificates](https://www.vk.com)
-# Avatarika-server
-# Avatarika-server
