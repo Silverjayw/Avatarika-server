@@ -1,0 +1,33 @@
+{
+  "pid": 3,
+  "titles": {
+    "en_US": "Avatarika"
+  },
+  "launch": [
+    {
+      "label": "Default",
+      "default": true,
+      "regions": [
+        "*"
+      ],
+      "locales": [
+        "*"
+      ],
+      "main": {
+        "path": "client.exe",
+        "arguments": [
+          "/24B3D4DC-BA6D-4ECD-94D5-F7C2F9EDDE7B",
+          "/gamexp_sid {SID}",
+          "/pid {PID}",
+          "/locale {LANG}",
+          "/distributor {DISTRIBUTOR}"
+        ],
+        "elevate": false
+      }
+    }
+  ],
+  "install": {
+    "id": "20230321131946",
+    "directory": "Avatarika"
+  }
+}
