@@ -19,13 +19,21 @@ chmod +x run_avatnika.sh
 ./run_avatnika.sh
 ```
 
-Or manually:
+Or manually with mock servers:
 
 ```bash
 cd /home/sanitar/Desktop/AVATARIKA
 python3 mock_accesspoint_tls.py
 python3 mock_game_server.py
 python3 mock_auth_server.py
+chmod +x run_avatnika.sh
+./run_avatnika.sh
+```
+
+Or just the client (uses real accesspoint):
+
+```bash
+cd /home/sanitar/Desktop/AVATARIKA
 chmod +x run_avatnika.sh
 ./run_avatnika.sh
 ```
